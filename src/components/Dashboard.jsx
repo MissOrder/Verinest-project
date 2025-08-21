@@ -1,6 +1,10 @@
 import { useState, useEffect } from "react";
+import { useAuth } from "../context/AuthContext";
+import { useNavigate } from "react-router-dom";
+import { handleSignOut } from "../utils/AuthHandlers.js";
 
-// Import SVG icons (you'll need to add these to your assets)
+
+// Import SVG icons
 import dashboardIcon from "/assets/dashboard.svg";
 import propertiesIcon from "/assets/properties.svg";
 import walletIcon from "/assets/wallet.svg";
@@ -10,18 +14,25 @@ import settingsIcon from "/assets/settings.svg";
 import helpIcon from "/assets/help.svg";
 import logoutIcon from "/assets/logout.svg";
 import bell from "/assets/bell.svg";
-import user from "/assets/user.svg";
+import userIcon from "/assets/user.svg";
 import verinestlogo2 from "/assets/verinestlogo2.svg";
 import eyeOpen from "/assets/eye-open.svg";
 import eyeClosed from "/assets/eye-closed.svg";
 
 export default function Dashboard() {
+  const { user: authUser, setUser } = useAuth();
+  
+  const navigate = useNavigate();
+  
   const [activeTab, setActiveTab] = useState("Dashboard");
   const [missionTab, setMissionTab] = useState("General");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [balanceVisible, setBalanceVisible] = useState(false);
-  const [currentStreak, setCurrentStreak] = useState(3);
-  const [maxStreak, setMaxStreak] = useState(7);
+  const [currentStreak, setCurrentStreak] = useState(0);
+  const [maxStreak, setMaxStreak] = useState(0);
+  const [userData, setUserData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   // Sidebar menu items with SVG icons
   const menuItems = [
@@ -48,54 +59,77 @@ export default function Dashboard() {
     return total;
   };
 
-  // Initialize user data on component mount
-  useEffect(() => {
-    // Check if user has logged in today
-    const today = new Date().toDateString();
-    const storedLastLogin = localStorage.getItem('lastLoginDate');
-    const storedStreak = parseInt(localStorage.getItem('currentStreak') || '0');
-    const storedMaxStreak = parseInt(localStorage.getItem('maxStreak') || '0');
-    
-    if (storedLastLogin !== today) {
-      // User is logging in on a new day
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
+  // Fetch user data from API
+  const fetchUserData = async () => {
+    try {
+      setLoading(true);
+      const response = await fetch('https://verinest.up.railway.app/api/users/me', {
+        credentials: 'include'
+      });
       
-      if (storedLastLogin === yesterday.toDateString()) {
-        // Consecutive login - increment streak
-        const newStreak = storedStreak + 1;
-        setCurrentStreak(newStreak);
-        localStorage.setItem('currentStreak', newStreak.toString());
-        
-        if (newStreak > storedMaxStreak) {
-          setMaxStreak(newStreak);
-          localStorage.setItem('maxStreak', newStreak.toString());
-        }
-      } else if (!storedLastLogin) {
-        // First time login
-        setCurrentStreak(1);
-        setMaxStreak(1);
-        localStorage.setItem('currentStreak', '1');
-        localStorage.setItem('maxStreak', '1');
-      } else {
-        // Broken streak - reset to 1
-        setCurrentStreak(1);
-        localStorage.setItem('currentStreak', '1');
-        setMaxStreak(storedMaxStreak);
+      if (!response.ok) {
+        throw new Error('Failed to fetch user data');
       }
       
-      // Update last login date
-      localStorage.setItem('lastLoginDate', today);
-    } else {
-      // User has already logged in today
-      setCurrentStreak(storedStreak);
-      setMaxStreak(storedMaxStreak);
+      const data = await response.json();
+      
+      if (data.status === 'success') {
+        setUserData(data.data.user);
+        
+        // Calculate streak based on account creation date (example logic)
+        const accountCreationDate = new Date(data.data.user.createdAt);
+        const daysSinceCreation = Math.floor((new Date() - accountCreationDate) / (1000 * 60 * 60 * 24));
+        setCurrentStreak(Math.min(daysSinceCreation, 7));
+        setMaxStreak(daysSinceCreation > 7 ? daysSinceCreation : 7);
+      }
+    } catch (err) {
+      setError(err.message);
+      console.error('Error fetching user data:', err);
+    } finally {
+      setLoading(false);
     }
-  }, []);
+  };
+
+  // Initialize user data on component mount
+  useEffect(() => {
+    if (authUser) {
+      fetchUserData();
+    }
+  }, [authUser]);
 
   const toggleBalanceVisibility = () => {
     setBalanceVisible(!balanceVisible);
   };
+
+  const handleLogout = () => {
+    handleSignOut({ setUser, navigate });
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-2xl">Loading...</h1>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-2xl text-red-600">Error: {error}</h1>
+          <button 
+            onClick={fetchUserData}
+            className="mt-4 px-4 py-2 bg-blue-500 text-white rounded"
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-slate-50 relative">
@@ -127,10 +161,13 @@ export default function Dashboard() {
         
         <div className="px-4 py-2 flex items-center gap-3 bg-slate-800 mx-4 rounded-lg">
           <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center">
-            <span className="text-white font-semibold">JD</span>
+            <span className="text-white font-semibold">
+              {userData?.name ? userData.name.charAt(0).toUpperCase() : 'U'}
+            </span>
           </div>
           <div>
-            <p className="text-sm font-medium">John Doe</p>
+            <p className="text-sm font-medium">{userData?.name || 'User'}</p>
+            <p className="text-xs text-slate-400">Trust Score: {userData?.trust_score || 0}</p>
           </div>
         </div>
         
@@ -155,6 +192,7 @@ export default function Dashboard() {
               </li>
             ))}
             <li
+              onClick={handleLogout}
               className="flex items-center gap-3 p-3 rounded-lg cursor-pointer transition text-sm lg:text-base hover:bg-slate-700 mt-4"
             >
               <img src={logoutIcon} alt="Logout" className="w-5 h-5" />
@@ -211,9 +249,9 @@ export default function Dashboard() {
             
             <div className="flex items-center gap-2 cursor-pointer p-2 rounded-lg hover:bg-slate-100 transition">
               <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center">
-                <img src={user} alt="User" className="w-5 h-5" />
+                <img src={userIcon} alt="User" className="w-5 h-5" />
               </div>
-              <span className="hidden md:block text-sm font-medium">John Doe</span>
+              <span className="hidden md:block text-sm font-medium">{userData?.name || 'User'}</span>
             </div>
           </div>
         </div>
@@ -222,7 +260,7 @@ export default function Dashboard() {
         <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-6">
           {/* Welcome Header with Streak Info */}
           <div className="bg-[#113c5e] text-white p-6 rounded-2xl">
-            <h1 className="text-2xl font-bold mb-2">Welcome back, John!</h1>
+            <h1 className="text-2xl font-bold mb-2">Welcome back, {userData?.name || 'User'}!</h1>
             <p className="opacity-90 mb-4">Keep your streak going! Login daily to earn bonus VTS tokens.</p>
             
             <div className="flex items-center gap-6">
@@ -275,7 +313,7 @@ export default function Dashboard() {
                 {balanceVisible ? (
                   <>
                     <span className="text-3xl font-bold text-slate-800">
-                      2.970
+                      {userData?.trust_score || 0}.00
                     </span>
                     <span className="text-lg text-slate-600 ml-2">
                       VTS
