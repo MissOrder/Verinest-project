@@ -23,7 +23,7 @@ import RealEstateQuiz from "../components/RealEstateQuiz";
 import ComingSoon from "../components/ComingSoon";
 
 export default function Dashboard() {
-  const { setUser } = useAuth(); // Removed unused 'user' variable
+  const { user, setUser } = useAuth();
   const navigate = useNavigate();
 
   const [activeTab, setActiveTab] = useState("Dashboard");
@@ -39,8 +39,7 @@ export default function Dashboard() {
   const [isQuizOpen, setIsQuizOpen] = useState(false);
   const [completedMissions, setCompletedMissions] = useState([]);
   const [lastLoginTime, setLastLoginTime] = useState(null);
-  const [claimedDays, setClaimedDays] = useState([]);
-  const [todayClaimed, setTodayClaimed] = useState(false);
+  const [isUpdatingStreak, setIsUpdatingStreak] = useState(false);
 
   // Sidebar menu items with SVG icons
   const menuItems = [
@@ -58,148 +57,90 @@ export default function Dashboard() {
     return day === 5 ? 10 : 5;
   };
 
-  // Add trust points to user
-  const addTrustPoints = useCallback(async (points) => {
-    try {
-      if (!userData || !userData.id) {
-        console.log("User data not available yet");
-        return false;
+  // Check and update login streak
+  const updateLoginStreak = () => {
+    const now = new Date();
+    const lastLogin = localStorage.getItem("lastLogin");
+    const storedStreak = parseInt(localStorage.getItem("currentStreak") || "0");
+    const storedMaxStreak = parseInt(localStorage.getItem("maxStreak") || "0");
+
+    if (lastLogin) {
+      const lastLoginDate = new Date(JSON.parse(lastLogin));
+      const hoursSinceLastLogin = (now - lastLoginDate) / (1000 * 60 * 60);
+
+      // If more than 36 hours have passed, reset streak
+      if (hoursSinceLastLogin > 36) {
+        setCurrentStreak(1);
+        localStorage.setItem("currentStreak", "1");
       }
-      
-      const token = localStorage.getItem("token");
+      // If between 12-36 hours, increment streak
+      else if (hoursSinceLastLogin >= 12) {
+        const newStreak = storedStreak + 1;
+        setCurrentStreak(newStreak);
+        localStorage.setItem("currentStreak", newStreak.toString());
+
+        // Update max streak if needed
+        if (newStreak > storedMaxStreak) {
+          setMaxStreak(newStreak);
+          localStorage.setItem("maxStreak", newStreak.toString());
+        }
+
+        // Add 5 VTS for daily login
+        addTrustPoints(5);
+      }
+      // If less than 12 hours, maintain current streak
+      else {
+        setCurrentStreak(storedStreak);
+      }
+    } else {
+      // First login
+      setCurrentStreak(1);
+      localStorage.setItem("currentStreak", "1");
+      addTrustPoints(5);
+    }
+
+    // Update last login time
+    localStorage.setItem("lastLogin", JSON.stringify(now));
+    setLastLoginTime(now);
+  };
+
+  // Add trust points to user
+  const addTrustPoints = async (points) => {
+    try {
       const response = await fetch(
         "https://verinest.up.railway.app/api/users/trust_point",
         {
           method: "PUT",
+          credentials: "include",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({
-            user_id: userData.id,
             score_to_add: points,
           }),
         }
       );
 
       if (response.ok) {
-        const result = await response.json();
-        // Update both user context and local user data
-        setUser(prev => ({...prev, trust_score: result.data.user.trust_score}));
-        setUserData(prev => ({...prev, trust_score: result.data.user.trust_score}));
-        return true;
-      } else {
-        const errorText = await response.text();
-        console.error("Failed to update trust score:", errorText);
-        return false;
+        // Update local state
+        setUserData((prev) => ({
+          ...prev,
+          trust_score: (prev.trust_score || 0) + points,
+        }));
       }
     } catch (error) {
       console.error("Error updating trust score:", error);
-      return false;
-    }
-  }, [setUser, userData]);
-
-  // Check login status and update streak
-  const updateLoginStatus = useCallback(() => {
-    const now = new Date();
-    const today = now.toDateString();
-    const lastLogin = localStorage.getItem("lastLogin");
-    const storedStreak = parseInt(localStorage.getItem("currentStreak") || "0");
-    const storedMaxStreak = parseInt(localStorage.getItem("maxStreak") || "0");
-    const lastClaimedDate = localStorage.getItem("lastClaimedDate");
-    
-    let newStreak = storedStreak;
-    
-    // Check if user already logged in today
-    if (lastLogin) {
-      const lastLoginDate = new Date(JSON.parse(lastLogin));
-      const lastLoginDay = lastLoginDate.toDateString();
-      
-      if (lastLoginDay === today) {
-        // User already logged in today
-        setCurrentStreak(storedStreak);
-        setLastLoginTime(lastLoginDate);
-        return;
-      }
-      
-      // Check if consecutive login
-      const yesterday = new Date(now);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayString = yesterday.toDateString();
-      const lastLoginDayString = lastLoginDate.toDateString();
-      
-      if (lastLoginDayString === yesterdayString) {
-        // Consecutive login
-        newStreak = storedStreak + 1;
-      } else {
-        // Broken streak
-        newStreak = 1;
-      }
-    } else {
-      // First login
-      newStreak = 1;
-    }
-    
-    // Update streak values
-    setCurrentStreak(newStreak);
-    localStorage.setItem("currentStreak", newStreak.toString());
-    
-    // Update max streak if needed
-    if (newStreak > storedMaxStreak) {
-      setMaxStreak(newStreak);
-      localStorage.setItem("maxStreak", newStreak.toString());
-    }
-    
-    // Update last login time
-    localStorage.setItem("lastLogin", JSON.stringify(now));
-    setLastLoginTime(now);
-    
-    // Check if today's reward already claimed
-    if (lastClaimedDate === today) {
-      setTodayClaimed(true);
-    }
-  }, []);
-
-  // Claim daily reward
-  const claimDailyReward = async (day) => {
-    try {
-      const points = calculateReward(day);
-      const success = await addTrustPoints(points);
-      
-      if (success) {
-        // Mark day as claimed
-        const today = new Date().toDateString();
-        localStorage.setItem("lastClaimedDate", today);
-        setTodayClaimed(true);
-        setClaimedDays(prev => [...prev, day]);
-        
-        // Show success message
-        alert(`Successfully claimed ${points} VTS!`);
-      } else {
-        alert("Failed to claim reward. Please try again.");
-      }
-    } catch (error) {
-      console.error("Error claiming reward:", error);
-      alert("An error occurred while claiming your reward.");
     }
   };
 
   // Fetch user data from API
-  const fetchUserData = useCallback(async () => {
+  const fetchUserData = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem("token");
-      if (!token) {
-        navigate("/login");
-        return;
-      }
-
       const response = await fetch(
         "https://verinest.up.railway.app/api/users/me",
         {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+          credentials: "include",
         }
       );
 
@@ -211,7 +152,6 @@ export default function Dashboard() {
 
       if (data.status === "success") {
         setUserData(data.data.user);
-        setUser(data.data.user);
 
         // Initialize streak from localStorage
         const storedStreak = parseInt(
@@ -221,32 +161,84 @@ export default function Dashboard() {
           localStorage.getItem("maxStreak") || "0"
         );
         const lastLogin = localStorage.getItem("lastLogin");
-        const lastClaimedDate = localStorage.getItem("lastClaimedDate");
-        const today = new Date().toDateString();
 
         setCurrentStreak(storedStreak);
         setMaxStreak(storedMaxStreak);
         setLastLoginTime(lastLogin ? new Date(JSON.parse(lastLogin)) : null);
-        setTodayClaimed(lastClaimedDate === today);
-        
-        // Update login status
-        updateLoginStatus();
       }
     } catch (err) {
       setError(err.message);
       console.error("Error fetching user data:", err);
-      if (err.message.includes("Failed to fetch") || err.message.includes("token")) {
-        navigate("/login");
-      }
     } finally {
       setLoading(false);
     }
-  }, [navigate, setUser, updateLoginStatus]);
+  };
 
   // Initialize user data on component mount
   useEffect(() => {
-    fetchUserData();
-  }, [fetchUserData]);
+    async function loadCurrentUser() {
+      setLoading(true);
+
+      try {
+        const token = localStorage.getItem("token");
+        if (!token) {
+          navigate("/login");
+          return;
+        }
+
+        const res = await fetch(
+          "https://verinest.up.railway.app/api/users/me",
+          {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        const result = await res.json();
+        console.log("API /me response:", result);
+
+        if (res.ok && result.data?.user) {
+          setUser(result.data.user);
+          setUserData(result.data.user);
+
+          // Initialize streak from localStorage
+          const storedStreak = parseInt(
+            localStorage.getItem("currentStreak") || "0"
+          );
+          const storedMaxStreak = parseInt(
+            localStorage.getItem("maxStreak") || "0"
+          );
+          const lastLogin = localStorage.getItem("lastLogin");
+
+          setCurrentStreak(storedStreak);
+          setMaxStreak(storedMaxStreak);
+          setLastLoginTime(lastLogin ? new Date(JSON.parse(lastLogin)) : null);
+
+          // Update login streak
+          updateLoginStreak();
+        } else {
+          navigate("/login");
+        }
+      } catch (err) {
+        console.error("Error:", err);
+        navigate("/login");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    if (!user) {
+      loadCurrentUser();
+    } else {
+      setLoading(false);
+      setUserData(user);
+      // Update login streak
+      updateLoginStreak();
+    }
+  }, [user, setUser, navigate]);
 
   const toggleBalanceVisibility = () => {
     setBalanceVisible(!balanceVisible);
@@ -262,18 +254,31 @@ export default function Dashboard() {
 
   const handleTwitterComplete = async () => {
     try {
-      const success = await addTrustPoints(5);
-      if (success) {
+      const response = await fetch(
+        "https://verinest.up.railway.app/api/users/trust_point",
+        {
+          method: "PUT",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            score_to_add: 5,
+          }),
+        }
+      );
+
+      if (response.ok) {
+        // Update local state
+        setUserData((prev) => ({
+          ...prev,
+          trust_score: (prev.trust_score || 0) + 5,
+        }));
         setCompletedMissions((prev) => [...prev, "twitter"]);
         setIsTwitterPopupOpen(false);
-        alert("Successfully claimed 5 VTS for Twitter mission!");
-      } else {
-        console.error("Failed to add Twitter mission points");
-        alert("Failed to claim Twitter mission reward. Please try again.");
       }
     } catch (error) {
       console.error("Error updating trust score:", error);
-      alert("An error occurred while claiming your reward.");
     }
   };
 
@@ -281,20 +286,31 @@ export default function Dashboard() {
     // Only add points if all answers are correct
     if (score === 5) {
       try {
-        const success = await addTrustPoints(5);
-        if (success) {
+        const response = await fetch(
+          "https://verinest.up.railway.app/api/users/trust_point",
+          {
+            method: "PUT",
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              score_to_add: 5,
+            }),
+          }
+        );
+
+        if (response.ok) {
+          // Update local state
+          setUserData((prev) => ({
+            ...prev,
+            trust_score: (prev.trust_score || 0) + 5,
+          }));
           setCompletedMissions((prev) => [...prev, "quiz"]);
-          alert("Successfully claimed 5 VTS for completing the quiz!");
-        } else {
-          console.error("Failed to add quiz points");
-          alert("Failed to claim quiz reward. Please try again.");
         }
       } catch (error) {
         console.error("Error updating trust score:", error);
-        alert("An error occurred while claiming your reward.");
       }
-    } else {
-      alert("You need to answer all questions correctly to earn VTS.");
     }
     setIsQuizOpen(false);
   };
@@ -303,8 +319,7 @@ export default function Dashboard() {
     return (
       <div className="min-h-screen w-full flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#113c5e] mx-auto"></div>
-          <h1 className="text-xl mt-4">Loading your dashboard...</h1>
+          <h1 className="text-2xl">Loading...</h1>
         </div>
       </div>
     );
@@ -314,11 +329,10 @@ export default function Dashboard() {
     return (
       <div className="min-h-screen w-full flex items-center justify-center">
         <div className="text-center">
-          <h1 className="text-2xl text-red-600 mb-4">Error Loading Dashboard</h1>
-          <p className="text-slate-600 mb-6">{error}</p>
+          <h1 className="text-2xl text-red-600">Error: {error}</h1>
           <button
             onClick={fetchUserData}
-            className="px-4 py-2 bg-[#113c5e] text-white rounded-lg hover:bg-[#0c2a44] transition"
+            className="mt-4 px-4 py-2 bg-blue-500 text-white rounded"
           >
             Try Again
           </button>
@@ -341,7 +355,7 @@ export default function Dashboard() {
         {/* Sidebar */}
         <aside
           className={`fixed lg:static inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white flex flex-col transform transition-transform duration-300 ease-in-out
-            ${sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}`}
+						${sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}`}
         >
           <div className="p-4 lg:p-6 flex items-center justify-between">
             <img src={verinestlogo2} alt="VeriNest Logo" className="h-8" />
@@ -378,7 +392,7 @@ export default function Dashboard() {
                     setSidebarOpen(false);
                   }}
                   className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition text-sm lg:text-base
-                    ${
+										${
                       activeTab === item.name
                         ? "bg-[#113c5e] font-semibold text-white"
                         : "hover:bg-slate-700"
@@ -455,7 +469,7 @@ export default function Dashboard() {
                   Welcome back, {userData?.name || "User"}!
                 </h1>
                 <p className="opacity-90 mb-4">
-                  Claim your daily rewards and complete missions to earn VTS tokens.
+                  Keep your streak going! Login daily to earn bonus VTS tokens.
                 </p>
 
                 <div className="flex items-center gap-6">
@@ -477,7 +491,7 @@ export default function Dashboard() {
                       <div className="text-center">
                         <p className="text-sm opacity-80">Last Login</p>
                         <p className="text-sm">
-                          {lastLoginTime.toLocaleDateString()} at {lastLoginTime.toLocaleTimeString()}
+                          {lastLoginTime.toLocaleTimeString()}
                         </p>
                       </div>
                     </>
@@ -539,59 +553,42 @@ export default function Dashboard() {
                     Daily Login Rewards
                   </h2>
                   <div className="grid grid-cols-7 gap-3 mb-6">
-                    {[1, 2, 3, 4, 5, 6, 7].map((day) => {
-                      const isClaimed = claimedDays.includes(day) || (day === currentStreak && todayClaimed);
-                      const canClaim = day === currentStreak && !todayClaimed;
-                      
-                      return (
+                    {[1, 2, 3, 4, 5, 6, 7].map((day) => (
+                      <div
+                        key={day}
+                        className={`flex flex-col items-center p-3 rounded-xl border transition-all duration-300 ${
+                          day <= currentStreak
+                            ? "bg-green-50 border-green-200 shadow-sm"
+                            : "bg-slate-50 border-slate-200"
+                        }`}
+                      >
+                        <span className="text-xs font-semibold text-slate-600 mb-2">
+                          Day {day}
+                        </span>
                         <div
-                          key={day}
-                          className={`flex flex-col items-center p-3 rounded-xl border transition-all duration-300 ${
-                            isClaimed
-                              ? "bg-green-50 border-green-200 shadow-sm"
-                              : canClaim
-                              ? "bg-blue-50 border-blue-200 shadow-sm cursor-pointer"
-                              : "bg-slate-50 border-slate-200"
+                          className={`w-8 h-8 rounded-full flex items-center justify-center mb-2 transition-all duration-300 ${
+                            day <= currentStreak
+                              ? "bg-green-500 text-white shadow-md"
+                              : "bg-slate-200 text-slate-400"
                           }`}
-                          onClick={canClaim ? () => claimDailyReward(day) : undefined}
                         >
-                          <span className="text-xs font-semibold text-slate-600 mb-2">
-                            Day {day}
-                          </span>
-                          <div
-                            className={`w-8 h-8 rounded-full flex items-center justify-center mb-2 transition-all duration-300 ${
-                              isClaimed
-                                ? "bg-green-500 text-white shadow-md"
-                                : canClaim
-                                ? "bg-blue-500 text-white shadow-md"
-                                : "bg-slate-200 text-slate-400"
-                            }`}
-                          >
-                            {isClaimed ? "✓" : canClaim ? "!" : ""}
-                          </div>
-                          <span className="text-xs font-bold text-slate-800">
-                            {calculateReward(day)} VTS
-                          </span>
-                          {canClaim && (
-                            <span className="text-xs text-blue-600 mt-1 font-medium">Click to claim</span>
-                          )}
+                          {day <= currentStreak ? "✓" : ""}
                         </div>
-                      );
-                    })}
+                        <span className="text-xs font-bold text-slate-800">
+                          {calculateReward(day)} VTS
+                        </span>
+                      </div>
+                    ))}
                   </div>
                   <div className="bg-slate-50 p-4 rounded-lg border border-slate-200">
                     <p className="text-sm text-slate-700 text-center">
-                      {todayClaimed ? (
+                      {currentStreak > 0 ? (
                         <>
-                          You've already claimed your reward today. Come back tomorrow!
-                        </>
-                      ) : currentStreak > 0 ? (
-                        <>
-                          Click on Day {currentStreak} to claim your{" "}
+                          You've logged in for{" "}
                           <span className="font-semibold text-[#113c5e]">
-                            {calculateReward(currentStreak)} VTS
+                            {currentStreak}
                           </span>{" "}
-                          reward!
+                          consecutive days. Keep it up!
                         </>
                       ) : (
                         "Log in daily to earn bonus VTS tokens. Your streak starts today!"
@@ -634,14 +631,9 @@ export default function Dashboard() {
                     </div>
                     <button
                       onClick={handleTwitterMission}
-                      disabled={completedMissions.includes("twitter")}
-                      className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap ${
-                        completedMissions.includes("twitter")
-                          ? "bg-green-100 text-green-700 cursor-not-allowed"
-                          : "bg-blue-100 text-blue-700 hover:bg-blue-200"
-                      }`}
+                      className="bg-blue-100 text-blue-700 hover:bg-blue-200 px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap"
                     >
-                      {completedMissions.includes("twitter") ? "Completed" : "Go"}
+                      Go
                     </button>
                   </div>
 
@@ -672,14 +664,9 @@ export default function Dashboard() {
                     </div>
                     <button
                       onClick={() => setIsQuizOpen(true)}
-                      disabled={completedMissions.includes("quiz")}
-                      className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap ${
-                        completedMissions.includes("quiz")
-                          ? "bg-green-100 text-green-700 cursor-not-allowed"
-                          : "bg-blue-100 text-blue-700 hover:bg-blue-200"
-                      }`}
+                      className="bg-blue-100 text-blue-700 hover:bg-blue-200 px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap"
                     >
-                      {completedMissions.includes("quiz") ? "Completed" : "Start"}
+                      Start
                     </button>
                   </div>
                 </div>
